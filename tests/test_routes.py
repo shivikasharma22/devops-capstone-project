@@ -160,4 +160,3 @@ def delete_account(account_id: int):
         account.delete()
     # Per REST best practice and common test expectations, delete is idempotent
     return make_response("", status.HTTP_204_NO_CONTENT)
-``
