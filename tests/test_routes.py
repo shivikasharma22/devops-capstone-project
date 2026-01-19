@@ -1,162 +1,110 @@
-
-# service/routes.py
 """
-Routes (Controller) for the Account REST API service.
-Implements CRUD endpoints and health/home checks.
+Test cases for Account REST API routes
 """
 
-from flask import jsonify, request, make_response, abort, url_for
-from service import app  # Flask application instance from service/__init__.py
-from service.models import Account, DataValidationError
+import json
+import logging
+import unittest
+
+from service import app
 from service.common import status
-
-
-######################################################################
-# Utility Functions
-######################################################################
-def _check_content_type_json():
-    """Ensure the request has JSON content type."""
-    # request.is_json handles variants like "application/json; charset=utf-8"
-    if not request.is_json:
-        abort(
-            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            description="Content-Type must be application/json",
-        )
-
+from service.models import db, Account
 
 ######################################################################
-# Health and Root
-######################################################################
-@app.route("/", methods=["GET"])
-def index():
-    """Root endpoint for sanity check."""
-    message = {
-        "name": "Account REST API Service",
-        "status": "OK",
-        "version": "1.0",
-    }
-    return make_response(jsonify(message), status.HTTP_200_OK)
 
-
-@app.route("/health", methods=["GET"])
-def health():
-    """Health probe endpoint."""
-    return make_response(jsonify({"status": "OK"}), status.HTTP_200_OK)
-
+# Test Case
 
 ######################################################################
-# Account Collection Endpoints
-######################################################################
-@app.route("/accounts", methods=["POST"])
-def create_account():
-    """
-    Create a new Account.
-    Expects JSON body compatible with Account.deserialize.
-    Returns:
-      201 Created with the new resource and Location header.
-      400 Bad Request on validation errors.
-      415 Unsupported Media Type when Content-Type is not JSON.
-    """
-    app.logger.info("Request to create an Account")
-    _check_content_type_json()
+class TestAccountRoutes(unittest.TestCase):
+"""Test Cases for Account Routes"""
 
-    try:
-        data = request.get_json()
-        account = Account()
-        account.deserialize(data)
-        account.create()
-    except DataValidationError as err:
-        abort(status.HTTP_400_BAD_REQUEST, description=str(err))
+```
+@classmethod
+def setUpClass(cls):
+    """Run once before all tests"""
+    app.config["TESTING"] = True
+    app.config["DEBUG"] = False
+    app.logger.setLevel(logging.CRITICAL)
+    cls.client = app.test_client()
 
-    location_url = url_for("get_accounts", account_id=account.id, _external=False)
-    resp = make_response(jsonify(account.serialize()), status.HTTP_201_CREATED)
-    resp.headers["Location"] = location_url
-    return resp
+def setUp(self):
+    """Run before each test"""
+    db.session.query(Account).delete()
+    db.session.commit()
 
+##################################################################
+#  ROUTE TESTS
+##################################################################
 
-@app.route("/accounts", methods=["GET"])
-def list_accounts():
-    """
-    List Accounts.
-    Optional query param: ?name=<string> to filter by name.
-    Returns 200 with a JSON array.
-    """
-    name = request.args.get("name")
-    app.logger.info("Request to list Accounts%s", f" with name={name}" if name else "")
+def test_index(self):
+    """It should return the Home page"""
+    response = self.client.get("/")
+    self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-    if name:
-        accounts = Account.find_by_name(name)
-    else:
-        accounts = Account.all()
+    data = response.get_json()
+    self.assertEqual(data["status"], "OK")
 
-    results = [acct.serialize() for acct in accounts]
-    return make_response(jsonify(results), status.HTTP_200_OK)
+def test_health(self):
+    """It should return the health status"""
+    response = self.client.get("/health")
+    self.assertEqual(response.status_code, status.HTTP_200_OK)
 
+    data = response.get_json()
+    self.assertEqual(data["status"], "OK")
 
-######################################################################
-# Account Resource Endpoints
-######################################################################
-@app.route("/accounts/<int:account_id>", methods=["GET"])
-def get_accounts(account_id: int):
-    """
-    Read a single Account by id.
-    Returns:
-      200 with the account JSON when found
-      404 when not found
-    """
-    app.logger.info("Processing lookup for id %s ...", account_id)
-    account = Account.find(account_id)
-    if not account:
-        abort(
-            status.HTTP_404_NOT_FOUND,
-            description=f"Account with id [{account_id}] not found.",
-        )
-    return make_response(jsonify(account.serialize()), status.HTTP_200_OK)
+def test_create_account(self):
+    """It should Create an Account"""
+    account = {"name": "John", "email": "john@example.com", "password": "secret"}
 
+    response = self.client.post(
+        "/accounts",
+        json=account,
+        content_type="application/json",
+    )
 
-@app.route("/accounts/<int:account_id>", methods=["PUT"])
-def update_account(account_id: int):
-    """
-    Update an existing Account by id.
-    Expects JSON body compatible with Account.deserialize.
-    Returns:
-      200 with the updated resource
-      404 if the account does not exist
-      400 on validation errors
-      415 if Content-Type is not JSON
-    """
-    app.logger.info("Request to update Account id=%s", account_id)
-    _check_content_type_json()
+    self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+    data = response.get_json()
+    self.assertEqual(data["name"], "John")
 
-    account = Account.find(account_id)
-    if not account:
-        abort(
-            status.HTTP_404_NOT_FOUND,
-            description=f"Account with id [{account_id}] not found.",
-        )
+def test_list_accounts(self):
+    """It should List all Accounts"""
+    account = Account(name="Jane", email="jane@example.com", password="pass")
+    account.create()
 
-    try:
-        data = request.get_json()
-        # Ensure the instance keeps the same id
-        account.deserialize(data)
-        account.id = account_id
-        account.update()
-    except DataValidationError as err:
-        abort(status.HTTP_400_BAD_REQUEST, description=str(err))
+    response = self.client.get("/accounts")
+    self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-    return make_response(jsonify(account.serialize()), status.HTTP_200_OK)
+    data = response.get_json()
+    self.assertEqual(len(data), 1)
 
+def test_read_account(self):
+    """It should Read an Account"""
+    account = Account(name="Bob", email="bob@example.com", password="pass")
+    account.create()
 
-@app.route("/accounts/<int:account_id>", methods=["DELETE"])
-def delete_account(account_id: int):
-    """
-    Delete an Account by id.
-    Returns:
-      204 No Content (idempotent, even if already absent)
-    """
-    app.logger.info("Request to delete Account id=%s", account_id)
-    account = Account.find(account_id)
-    if account:
-        account.delete()
-    # Per REST best practice and common test expectations, delete is idempotent
-    return make_response("", status.HTTP_204_NO_CONTENT)
+    response = self.client.get(f"/accounts/{account.id}")
+    self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+def test_update_account(self):
+    """It should Update an Account"""
+    account = Account(name="Alice", email="alice@example.com", password="pass")
+    account.create()
+
+    updated = {"name": "Alice Updated", "email": "alice@new.com", "password": "new"}
+
+    response = self.client.put(
+        f"/accounts/{account.id}",
+        json=updated,
+        content_type="application/json",
+    )
+
+    self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+def test_delete_account(self):
+    """It should Delete an Account"""
+    account = Account(name="Mark", email="mark@example.com", password="pass")
+    account.create()
+
+    response = self.client.delete(f"/accounts/{account.id}")
+    self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+```
