@@ -29,7 +29,6 @@ class TestAccountRoutes(unittest.TestCase):
         account = {
             "name": "John",
             "email": "john@example.com",
-            "password": "secret",
         }
         response = self.client.post(
             "/accounts",
@@ -39,25 +38,24 @@ class TestAccountRoutes(unittest.TestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
     def test_list_accounts(self):
-        account = Account(name="Jane", email="jane@example.com", password="pass")
+        account = Account(name="Jane", email="jane@example.com")
         account.create()
 
         response = self.client.get("/accounts")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     def test_read_account(self):
-        account = Account(name="Bob", email="bob@example.com", password="pass")
+        account = Account(name="Bob", email="bob@example.com")
         account.create()
         response = self.client.get(f"/accounts/{account.id}")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     def test_update_account(self):
-        account = Account(name="Alice", email="alice@example.com", password="pass")
+        account = Account(name="Alice", email="alice@example.com")
         account.create()
         updated = {
             "name": "Alice Updated",
             "email": "alice@new.com",
-            "password": "new",
         }
         response = self.client.put(
             f"/accounts/{account.id}",
@@ -67,7 +65,7 @@ class TestAccountRoutes(unittest.TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     def test_delete_account(self):
-        account = Account(name="Mark", email="mark@example.com", password="pass")
+        account = Account(name="Mark", email="mark@example.com")
         account.create()
 
         response = self.client.delete(f"/accounts/{account.id}")
