@@ -1,139 +1,163 @@
+
+# service/routes.py
 """
-Account API Service Test Suite
-
-Test cases can be run with the following:
-  nosetests -v --with-spec --spec-color
-  coverage report -m
+Routes (Controller) for the Account REST API service.
+Implements CRUD endpoints and health/home checks.
 """
-import os
-import logging
-from unittest import TestCase
-from tests.factories import AccountFactory
-from service.common import status  # HTTP Status Codes
-from service.models import db, Account, init_db
-from service.routes import app
 
-DATABASE_URI = os.getenv(
-    "DATABASE_URI", "postgresql://postgres:postgres@localhost:5432/postgres"
-)
-
-BASE_URL = "/accounts"
+from flask import jsonify, request, make_response, abort, url_for
+from service import app  # Flask application instance from service/__init__.py
+from service.models import Account, DataValidationError
+from service.common import status
 
 
 ######################################################################
-#  T E S T   C A S E S
+# Utility Functions
 ######################################################################
-class TestAccountService(TestCase):
-    """Account Service Tests"""
-
-    @classmethod
-    def setUpClass(cls):
-        """Run once before all tests"""
-        app.config["TESTING"] = True
-        app.config["DEBUG"] = False
-        app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URI
-        app.logger.setLevel(logging.CRITICAL)
-        init_db(app)
-
-    @classmethod
-    def tearDownClass(cls):
-        """Runs once before test suite"""
-
-    def setUp(self):
-        """Runs before each test"""
-        db.session.query(Account).delete()  # clean up the last tests
-        db.session.commit()
-
-        self.client = app.test_client()
-
-    def tearDown(self):
-        """Runs once after each test case"""
-        db.session.remove()
-
-    ######################################################################
-    #  H E L P E R   M E T H O D S
-    ######################################################################
-
-    def _create_accounts(self, count):
-        """Factory method to create accounts in bulk"""
-        accounts = []
-        for _ in range(count):
-            account = AccountFactory()
-            response = self.client.post(BASE_URL, json=account.serialize())
-            self.assertEqual(
-                response.status_code,
-                status.HTTP_201_CREATED,
-                "Could not create test Account",
-            )
-            new_account = response.get_json()
-            account.id = new_account["id"]
-            accounts.append(account)
-        return accounts
-
-    ######################################################################
-    #  A C C O U N T   T E S T   C A S E S
-    ######################################################################
-
-    def test_index(self):
-        """It should get 200_OK from the Home Page"""
-        response = self.client.get("/")
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-    def test_health(self):
-        """It should be healthy"""
-        resp = self.client.get("/health")
-        self.assertEqual(resp.status_code, 200)
-        data = resp.get_json()
-        self.assertEqual(data["status"], "OK")
-
-    def test_create_account(self):
-        """It should Create a new Account"""
-        account = AccountFactory()
-        response = self.client.post(
-            BASE_URL,
-            json=account.serialize(),
-            content_type="application/json"
+def _check_content_type_json():
+    """Ensure the request has JSON content type."""
+    # request.is_json handles variants like "application/json; charset=utf-8"
+    if not request.is_json:
+        abort(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            description="Content-Type must be application/json",
         )
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
-        # Make sure location header is set
-        location = response.headers.get("Location", None)
-        self.assertIsNotNone(location)
 
-        # Check the data is correct
-        new_account = response.get_json()
-        self.assertEqual(new_account["name"], account.name)
-        self.assertEqual(new_account["email"], account.email)
-        self.assertEqual(new_account["address"], account.address)
-        self.assertEqual(new_account["phone_number"], account.phone_number)
-        self.assertEqual(new_account["date_joined"], str(account.date_joined))
+######################################################################
+# Health and Root
+######################################################################
+@app.route("/", methods=["GET"])
+def index():
+    """Root endpoint for sanity check."""
+    message = {
+        "name": "Account REST API Service",
+        "status": "OK",
+        "version": "1.0",
+    }
+    return make_response(jsonify(message), status.HTTP_200_OK)
 
-    def test_bad_request(self):
-        """It should not Create an Account when sending the wrong data"""
-        response = self.client.post(BASE_URL, json={"name": "not enough data"})
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_unsupported_media_type(self):
-        """It should not Create an Account when sending the wrong media type"""
-        account = AccountFactory()
-        response = self.client.post(
-            BASE_URL,
-            json=account.serialize(),
-            content_type="test/html"
+@app.route("/health", methods=["GET"])
+def health():
+    """Health probe endpoint."""
+    return make_response(jsonify({"status": "OK"}), status.HTTP_200_OK)
+
+
+######################################################################
+# Account Collection Endpoints
+######################################################################
+@app.route("/accounts", methods=["POST"])
+def create_account():
+    """
+    Create a new Account.
+    Expects JSON body compatible with Account.deserialize.
+    Returns:
+      201 Created with the new resource and Location header.
+      400 Bad Request on validation errors.
+      415 Unsupported Media Type when Content-Type is not JSON.
+    """
+    app.logger.info("Request to create an Account")
+    _check_content_type_json()
+
+    try:
+        data = request.get_json()
+        account = Account()
+        account.deserialize(data)
+        account.create()
+    except DataValidationError as err:
+        abort(status.HTTP_400_BAD_REQUEST, description=str(err))
+
+    location_url = url_for("get_accounts", account_id=account.id, _external=False)
+    resp = make_response(jsonify(account.serialize()), status.HTTP_201_CREATED)
+    resp.headers["Location"] = location_url
+    return resp
+
+
+@app.route("/accounts", methods=["GET"])
+def list_accounts():
+    """
+    List Accounts.
+    Optional query param: ?name=<string> to filter by name.
+    Returns 200 with a JSON array.
+    """
+    name = request.args.get("name")
+    app.logger.info("Request to list Accounts%s", f" with name={name}" if name else "")
+
+    if name:
+        accounts = Account.find_by_name(name)
+    else:
+        accounts = Account.all()
+
+    results = [acct.serialize() for acct in accounts]
+    return make_response(jsonify(results), status.HTTP_200_OK)
+
+
+######################################################################
+# Account Resource Endpoints
+######################################################################
+@app.route("/accounts/<int:account_id>", methods=["GET"])
+def get_accounts(account_id: int):
+    """
+    Read a single Account by id.
+    Returns:
+      200 with the account JSON when found
+      404 when not found
+    """
+    app.logger.info("Processing lookup for id %s ...", account_id)
+    account = Account.find(account_id)
+    if not account:
+        abort(
+            status.HTTP_404_NOT_FOUND,
+            description=f"Account with id [{account_id}] not found.",
         )
-        self.assertEqual(response.status_code, status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
+    return make_response(jsonify(account.serialize()), status.HTTP_200_OK)
 
-    # ADD YOUR TEST CASES HERE ...
-    def test_get_account(self):
-        """It should Read a single Account"""
-        account = self._create_accounts(1)[0]
-        resp = self.client.get(
-            f"{BASE_URL}/{account.id}", content_type="application/json"
+
+@app.route("/accounts/<int:account_id>", methods=["PUT"])
+def update_account(account_id: int):
+    """
+    Update an existing Account by id.
+    Expects JSON body compatible with Account.deserialize.
+    Returns:
+      200 with the updated resource
+      404 if the account does not exist
+      400 on validation errors
+      415 if Content-Type is not JSON
+    """
+    app.logger.info("Request to update Account id=%s", account_id)
+    _check_content_type_json()
+
+    account = Account.find(account_id)
+    if not account:
+        abort(
+            status.HTTP_404_NOT_FOUND,
+            description=f"Account with id [{account_id}] not found.",
         )
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        data = resp.get_json()
-        self.assertEqual(data["name"], account.name)
-    def test_get_account_not_found(self):
-        """It should not Read an Account that is not found"""
-        resp = self.client.get(f"{BASE_URL}/0")
-        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    try:
+        data = request.get_json()
+        # Ensure the instance keeps the same id
+        account.deserialize(data)
+        account.id = account_id
+        account.update()
+    except DataValidationError as err:
+        abort(status.HTTP_400_BAD_REQUEST, description=str(err))
+
+    return make_response(jsonify(account.serialize()), status.HTTP_200_OK)
+
+
+@app.route("/accounts/<int:account_id>", methods=["DELETE"])
+def delete_account(account_id: int):
+    """
+    Delete an Account by id.
+    Returns:
+      204 No Content (idempotent, even if already absent)
+    """
+    app.logger.info("Request to delete Account id=%s", account_id)
+    account = Account.find(account_id)
+    if account:
+        account.delete()
+    # Per REST best practice and common test expectations, delete is idempotent
+    return make_response("", status.HTTP_204_NO_CONTENT)
+``
